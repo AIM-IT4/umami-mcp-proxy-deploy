@@ -1,3 +1,4 @@
+import json
 import os
 from fastapi import FastAPI, Request, Response
 import httpx
@@ -33,14 +34,30 @@ async def proxy(request: Request):
     if request.url.path.rstrip("/") != f"/{SECRET}/mcp":
         return Response(status_code=404)
 
+    body = await request.body()
+
+    is_initialize = False
+    if body:
+        try:
+            payload = json.loads(body)
+            if isinstance(payload, dict) and payload.get("method") == "initialize":
+                is_initialize = True
+        except Exception:
+            pass
+
     headers = {
         k: v
         for k, v in request.headers.items()
         if k.lower() in FORWARD_REQUEST_HEADERS
     }
+
+    # ChatGPT can send MCP-Protocol-Version on initialize.
+    # Umami rejects that combination, so strip it only for initialize.
+    if is_initialize:
+        headers.pop("mcp-protocol-version", None)
+
     headers["authorization"] = f"Bearer {API_KEY}"
 
-    body = await request.body()
     timeout = httpx.Timeout(connect=20.0, read=120.0, write=120.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         upstream = await client.request(
@@ -55,6 +72,7 @@ async def proxy(request: Request):
         for k, v in upstream.headers.items()
         if k.lower() in FORWARD_RESPONSE_HEADERS
     }
+
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
